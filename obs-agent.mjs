@@ -21,8 +21,28 @@ import readline from "node:readline/promises";
  * - <scriptDir>/obs-agent.config.json                    (dev)
  */
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * Robust Script/Working Dir (funktioniert in):
+ * - Node ESM (import.meta.url vorhanden)
+ * - esbuild bundle -> CJS (import.meta.url kann undefined sein)
+ * - pkg snapshot (process.execPath vorhanden)
+ */
+const SCRIPT_DIR = (() => {
+  try {
+    const u = typeof import.meta?.url === "string" ? import.meta.url : null;
+    if (u) return path.dirname(fileURLToPath(u));
+  } catch {
+    // ignore
+  }
+
+  const a1 = process.argv?.[1];
+  if (typeof a1 === "string" && a1.length > 0) return path.dirname(a1);
+
+  const ex = process.execPath;
+  if (typeof ex === "string" && ex.length > 0) return path.dirname(ex);
+
+  return process.cwd();
+})();
 
 function log(...a) {
   console.log(new Date().toISOString(), ...a);
@@ -70,7 +90,7 @@ function loadLocalConfig() {
     path.join(getExeDir(), "obs-agent.config.json"),
     path.join(process.cwd(), "obs-agent.config.json"),
     "C:\\clip-boost-agent\\obs-agent.config.json",
-    path.join(__dirname, "obs-agent.config.json"),
+    path.join(SCRIPT_DIR, "obs-agent.config.json"),
   ];
 
   for (const p of candidates) {
