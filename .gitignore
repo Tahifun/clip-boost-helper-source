@@ -1,0 +1,8 @@
+node_modules/
+dist/
+obs-agent.config.json
+*.log
+.DS_Store
+helper_ci_patch/
+.env
+.env.*

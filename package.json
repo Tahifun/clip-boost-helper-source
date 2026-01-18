@@ -1,0 +1,22 @@
+{
+  "name": "clip-boost-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "obs-agent.mjs",
+  "scripts": {
+    "start": "node obs-agent.mjs",
+    "build:win": "pkg obs-agent.mjs --targets node18-win-x64 --output dist/CLiP-BOOsT-Helper.exe",
+    "build:linux": "pkg obs-agent.mjs --targets node18-linux-x64 --output dist/CLiP-BOOsT-Helper-linux-x64",
+    "build:mac:x64": "pkg obs-agent.mjs --targets node18-macos-x64 --output dist/CLiP-BOOsT-Helper-mac-x64",
+    "build:mac:arm64": "pkg obs-agent.mjs --targets node18-macos-arm64 --output dist/CLiP-BOOsT-Helper-mac-arm64",
+    "build:mac": "npm run build:mac:x64 && npm run build:mac:arm64"
+  },
+  "dependencies": {
+    "obs-websocket-js": "^5.0.7",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
