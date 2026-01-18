@@ -3,11 +3,18 @@ name: Build & Publish CLiP-BOOsT Helper
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (z.B. v0.1.2)"
+        required: true
+        default: "v0.1.0"
+
   push:
     branches: [ main ]
     tags:
       - "v*.*.*"
 
+# Minimalrechte für diesen Workflow (wir nutzen für Releases im anderen Repo ein PAT als Secret)
 permissions:
   contents: read
 
@@ -101,8 +108,17 @@ jobs:
   publish-to-public-releases:
     runs-on: ubuntu-latest
     needs: [build-windows, build-macos, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
+      - name: Validate tag input (manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ inputs.version }}"
+          case "$TAG" in
+            v*) echo "OK: $TAG" ;;
+            *) echo "ERROR: version muss mit 'v' anfangen (z.B. v0.1.2)"; exit 1 ;;
+          esac
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -115,11 +131,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           repository: Tahifun/clip-boost-helper-releases
-          tag_name: ${{ github.ref_name }}
-          name: CLiP-BOOsT Helper ${{ github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          name: CLiP-BOOsT Helper ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          target_commitish: main
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: "Automated build from clip-boost-helper-source."
           files: |
             artifacts/helper-windows/CLiP-BOOsT-Helper.exe
             artifacts/helper-macos/CLiP-BOOsT-Helper-mac-arm64.zip
