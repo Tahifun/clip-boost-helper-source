@@ -7,20 +7,20 @@
   "scripts": {
     "start": "node obs-agent.mjs",
 
-    "bundle": "esbuild obs-agent.mjs --bundle --platform=node --format=cjs --target=node18 --outfile=build/obs-agent.cjs",
+    "build:bundle": "esbuild obs-agent.mjs --bundle --platform=node --target=node18 --format=cjs --outfile=dist/obs-agent.bundle.cjs",
 
-    "build:win": "npm run bundle && pkg build/obs-agent.cjs --targets node18-win-x64 --output dist/CLiP-BOOsT-Helper.exe",
-    "build:linux": "npm run bundle && pkg build/obs-agent.cjs --targets node18-linux-x64 --output dist/CLiP-BOOsT-Helper-linux-x64",
-    "build:mac:x64": "npm run bundle && pkg build/obs-agent.cjs --targets node18-macos-x64 --output dist/CLiP-BOOsT-Helper-mac-x64",
-    "build:mac:arm64": "npm run bundle && pkg build/obs-agent.cjs --targets node18-macos-arm64 --output dist/CLiP-BOOsT-Helper-mac-arm64",
-    "build:mac": "npm run build:mac:x64 && npm run build:mac:arm64"
+    "build:win": "npm run build:bundle && pkg dist/obs-agent.bundle.cjs --targets node18-win-x64 --output dist/CLiP-BOOsT-Helper.exe",
+
+    "build:linux": "npm run build:bundle && pkg dist/obs-agent.bundle.cjs --targets node18-linux-x64 --output dist/CLiP-BOOsT-Helper-linux-x64",
+
+    "build:mac": "npm run build:bundle && pkg dist/obs-agent.bundle.cjs --targets node18-macos-x64 --output dist/CLiP-BOOsT-Helper-mac-x64 && pkg dist/obs-agent.bundle.cjs --targets node18-macos-arm64 --output dist/CLiP-BOOsT-Helper-mac-arm64"
   },
   "dependencies": {
     "obs-websocket-js": "^5.0.7",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "esbuild": "^0.20.2",
+    "esbuild": "^0.24.0",
     "pkg": "^5.8.1"
   }
 }
