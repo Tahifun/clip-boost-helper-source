@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline/promises";
+import { normalizeAgentWsUrl, getBackendOrigin } from "./config.mjs";
 
 /**
  * Config-Dateien:
@@ -163,8 +164,11 @@ async function ensureInteractiveConfig(current) {
       log("\nSchritt 1/2: Verbindung zu CLiP-BOOsT");
       log("-> In CLiP-BOOsT (Dashboard) auf 'Code erstellen' klicken und den Link/Code kopieren.");
       const v = (await rl.question("Bitte hier einfügen: ")).trim();
-      // Accept full ws/wss url or plain token/link
-      next.agentWsUrl = v;
+      // Accept full ws/wss url OR http/https link OR plain token/code
+      next.agentWsUrl = normalizeAgentWsUrl(v);
+    } else {
+      // Falls bereits gesetzt, trotzdem robust normalisieren
+      next.agentWsUrl = normalizeAgentWsUrl(next.agentWsUrl);
     }
 
     if (!next.obsWsUrl) {
@@ -220,10 +224,12 @@ const OBS_PASSWORD =
   "";
 
 let AGENT_WS_URL =
-  process.env.AGENT_WS_URL ||
-  cfg.AGENT_WS_URL ||
-  cfg.agentWsUrl ||
-  "";
+  normalizeAgentWsUrl(
+    process.env.AGENT_WS_URL ||
+      cfg.AGENT_WS_URL ||
+      cfg.agentWsUrl ||
+      ""
+  );
 
 /** --- helpers: robust OBS call with fallback + better logging --- */
 async function obsCallFirst(obs, names, data = {}) {
@@ -292,6 +298,28 @@ async function main() {
   let obsWsUrl = OBS_WS_URL;
   let obsPassword = OBS_PASSWORD;
 
+  // Auto-migration: Falls env/Config nur einen Token oder eine kaputte URL enthaelt,
+  // speichern wir eine normalisierte WS-URL zurueck (reduziert Support-Faelle).
+  try {
+    const rawCandidate = process.env.AGENT_WS_URL || cfg.AGENT_WS_URL || cfg.agentWsUrl || "";
+    const normalized = normalizeAgentWsUrl(rawCandidate);
+    if (normalized && rawCandidate && normalized !== rawCandidate) {
+      AGENT_WS_URL = normalized;
+      const savePath = loaded.path || getPrimaryConfigPath();
+      const toWrite = {
+        agentWsUrl: AGENT_WS_URL,
+        obsWsUrl: cfg.obsWsUrl || OBS_WS_URL,
+        obsPassword: cfg.obsPassword || OBS_PASSWORD,
+        backendOrigin: getBackendOrigin(),
+      };
+      if (writeConfigSafely(savePath, toWrite)) {
+        log("[cfg] migrated agentWsUrl -> ws-url", savePath);
+      }
+    }
+  } catch {
+    // ignore migration failures
+  }
+
   // If backend url missing: do interactive setup and store it.
   if (!AGENT_WS_URL) {
     const next = await ensureInteractiveConfig({
@@ -305,9 +333,10 @@ async function main() {
     const fallbackPath = path.join(getExeDir(), "obs-agent.config.json");
 
     const toWrite = {
-      agentWsUrl: next.agentWsUrl,
+      agentWsUrl: normalizeAgentWsUrl(next.agentWsUrl),
       obsWsUrl: next.obsWsUrl,
       obsPassword: next.obsPassword,
+      backendOrigin: getBackendOrigin(),
     };
 
     if (writeConfigSafely(primaryPath, toWrite)) {
@@ -319,14 +348,14 @@ async function main() {
     }
 
     // Apply
-    AGENT_WS_URL = next.agentWsUrl;
+    AGENT_WS_URL = toWrite.agentWsUrl;
     obsWsUrl = next.obsWsUrl;
     obsPassword = next.obsPassword;
   }
 
   // Still validate
-  if (!AGENT_WS_URL) {
-    throw new Error("AGENT_WS_URL missing");
+  if (!AGENT_WS_URL || !/^wss?:\/\//i.test(AGENT_WS_URL)) {
+    throw new Error("AGENT_WS_URL missing/invalid (expected ws:// or wss://)");
   }
 
   const obs = new OBSWebSocket();
