@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline/promises";
+import child_process from "node:child_process";
 import { normalizeAgentWsUrl, getBackendOrigin } from "./config.mjs";
 
 /**
@@ -63,6 +64,125 @@ function safeJsonParse(s) {
 
 function mkRpcError(requestId, code, message) {
   return { type: "rpc_error", requestId, code, message, tsMs: Date.now() };
+}
+
+/**
+ * Deep-Linking / URL-Protocol
+ *
+ * Erwartet Aufruf via Windows URL Protocol (z. B. durch Browser):
+ *   clipboost://start?code=<token-oder-url>&backend=<https://api...>
+ *
+ * Ziel: 1-Klick aus dem Dashboard:
+ * - Helper startet
+ * - Token/Link wird uebernommen
+ * - Config wird gespeichert
+ */
+function parseDeepLinkFromArgv(argv) {
+  try {
+    const args = (argv || []).slice(2).map((x) => String(x || "").trim()).filter(Boolean);
+    const raw = args.find((a) => /^clipboost:\/\//i.test(a) || a.includes("clipboost://"));
+    if (!raw) return null;
+
+    const m = raw.match(/clipboost:\/\/[\S]+/i);
+    const u = (m && m[0]) ? m[0] : raw;
+
+    const url = new URL(u);
+    if (url.protocol !== "clipboost:") return null;
+
+    const action = (url.hostname || "").trim() || (String(url.pathname || "").replace(/^\/+/, "").trim());
+    const p = url.searchParams;
+    const code = p.get("code") || p.get("token") || p.get("ws") || p.get("url") || "";
+
+    const backendOrigin = p.get("backend") || p.get("backendOrigin") || "";
+    const obsWsUrl = p.get("obsWsUrl") || p.get("obs") || "";
+    const obsPassword = p.get("obsPassword") || p.get("pass") || "";
+
+    return {
+      raw: u,
+      action: action || "start",
+      code: code || "",
+      backendOrigin: backendOrigin || "",
+      obsWsUrl: obsWsUrl || "",
+      obsPassword: obsPassword || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function trySelfRegisterUrlProtocol() {
+  if (process.platform !== "win32") return;
+
+  try {
+    const exe = process.execPath;
+    if (!exe) return;
+
+    const base = "HKCU\\Software\\Classes\\clipboost";
+    const cmd = `"${exe}" "%1"`;
+
+    // HKCU => kein Admin notwendig
+    child_process.spawnSync("reg", ["add", base, "/ve", "/d", "URL:CLiP-BOOsT Protocol", "/f"], { stdio: "ignore", windowsHide: true });
+    child_process.spawnSync("reg", ["add", base, "/v", "URL Protocol", "/d", "", "/f"], { stdio: "ignore", windowsHide: true });
+    child_process.spawnSync("reg", ["add", base + "\\DefaultIcon", "/ve", "/d", exe + ",0", "/f"], { stdio: "ignore", windowsHide: true });
+    child_process.spawnSync(
+      "reg",
+      ["add", base + "\\shell\\open\\command", "/ve", "/d", cmd, "/f"],
+      { stdio: "ignore", windowsHide: true },
+    );
+  } catch {
+    // ignore
+  }
+}
+
+function openUrl(url) {
+  try {
+    const u = String(url || "").trim();
+    if (!u) return false;
+    if (process.platform === "win32") {
+      const cp = child_process.spawn("cmd", ["/c", "start", "", u], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      cp.unref();
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+function tryOpenObsWin() {
+  if (process.platform !== "win32") return false;
+  try {
+    const candidates = [];
+
+    const pf = process.env.ProgramFiles || "C:\\Program Files";
+    const pfx = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+
+    candidates.push(path.join(pf, "obs-studio", "bin", "64bit", "obs64.exe"));
+    candidates.push(path.join(pfx, "obs-studio", "bin", "64bit", "obs64.exe"));
+    candidates.push(path.join(local, "Programs", "obs-studio", "bin", "64bit", "obs64.exe"));
+
+    for (const exe of candidates) {
+      if (fs.existsSync(exe)) {
+        const cp = child_process.spawn(exe, [], {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        cp.unref();
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // fallback: open download page
+  return openUrl("https://obsproject.com/download");
 }
 
 function getExeDir() {
@@ -294,9 +414,53 @@ async function connectObs(obs, obsWsUrl, obsPassword) {
 }
 
 async function main() {
+  // Best-effort: portable self-registration (HKCU, no admin). Installer should do this anyway.
+  trySelfRegisterUrlProtocol();
+
+  // Deep link support (Dashboard -> Helper): clipboost://start?code=<token|url>&backend=<https://api...>
+  const dl = parseDeepLinkFromArgv(process.argv);
+  if (dl && dl.action && /obs/i.test(dl.action)) {
+    // clipboost://obs? -> open OBS best-effort and exit
+    const ok = tryOpenObsWin();
+    log(ok ? "[deeplink] OBS gestartet" : "[deeplink] OBS konnte nicht gestartet werden");
+    return;
+  }
+
   // Use these variables so we can override them after first-run setup.
   let obsWsUrl = OBS_WS_URL;
   let obsPassword = OBS_PASSWORD;
+
+  let deeplinkApplied = false;
+  if (dl && dl.code) {
+    try {
+      if (dl.backendOrigin) process.env.CLIP_BOOST_BACKEND_ORIGIN = String(dl.backendOrigin).trim();
+
+      // Apply to runtime
+      AGENT_WS_URL = normalizeAgentWsUrl(dl.code);
+      if (dl.obsWsUrl) obsWsUrl = String(dl.obsWsUrl).trim();
+      if (dl.obsPassword) obsPassword = String(dl.obsPassword).trim();
+
+      // Persist to primary path (AppData). If that fails, fallback to exe dir.
+      const primaryPath = getPrimaryConfigPath();
+      const fallbackPath = path.join(getExeDir(), "obs-agent.config.json");
+      const toWrite = {
+        agentWsUrl: AGENT_WS_URL,
+        obsWsUrl,
+        obsPassword,
+        backendOrigin: getBackendOrigin(),
+      };
+
+      if (writeConfigSafely(primaryPath, toWrite)) {
+        log("[deeplink] saved", primaryPath);
+      } else if (writeConfigSafely(fallbackPath, toWrite)) {
+        log("[deeplink] saved", fallbackPath);
+      }
+
+      deeplinkApplied = true;
+    } catch (e) {
+      log("[deeplink] apply failed", e?.message || String(e));
+    }
+  }
 
   // Auto-migration: Falls env/Config nur einen Token oder eine kaputte URL enthaelt,
   // speichern wir eine normalisierte WS-URL zurueck (reduziert Support-Faelle).
@@ -321,7 +485,7 @@ async function main() {
   }
 
   // If backend url missing: do interactive setup and store it.
-  if (!AGENT_WS_URL) {
+  if (!AGENT_WS_URL && !deeplinkApplied) {
     const next = await ensureInteractiveConfig({
       agentWsUrl: cfg.agentWsUrl || "",
       obsWsUrl: cfg.obsWsUrl || OBS_WS_URL,
