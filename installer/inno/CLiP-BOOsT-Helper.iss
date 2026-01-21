@@ -21,11 +21,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 
-; Per-user install: no UAC, no admin, minimal friction
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
-
-DefaultDirName={localappdata}\Programs\CLiP-BOOsT\Helper
+DefaultDirName={localappdata}\Programs\CLiP-BOOsT-Helper
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 
@@ -39,17 +35,16 @@ Compression=lzma
 SolidCompression=yes
 
 UninstallDisplayIcon={app}\{#MyAppExeName}
-; Optional: If you add an icon file later, enable this line.
 ; SetupIconFile=..\..\assets\icon.ico
 
 [Tasks]
-; Wichtig: Autostart NICHT default-aktiv (du willst es erst im Schnellstart-Step)
+; Hinweis: Kein Autostart. Helper startet nur per Deep-Link aus der App.
 Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescription: "Optionen:"; Flags: unchecked
-Name: "autostart"; Description: "Helper beim Windows-Start automatisch starten"; GroupDescription: "Optionen:"; Flags: unchecked
 
 [Files]
-; IMPORTANT: dist\CLiP-BOOsT-Helper.exe muss vorher gebaut sein
 Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Optional assets
+; Source: "..\..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\CLiP-BOOsT Helper"; Filename: "{app}\{#MyAppExeName}"
@@ -61,9 +56,6 @@ Root: HKCU; Subkey: "Software\Classes\clipboost"; ValueType: string; ValueName: 
 Root: HKCU; Subkey: "Software\Classes\clipboost"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\clipboost\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
 Root: HKCU; Subkey: "Software\Classes\clipboost\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
-
-; Optional: Autostart (HKCU Run)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CLiP-BOOsT Helper"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: autostart
 
 [Run]
 ; Helper NICHT automatisch starten (McAfee false positive kann Install stören)
