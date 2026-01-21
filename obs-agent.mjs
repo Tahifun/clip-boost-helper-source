@@ -79,17 +79,21 @@ function mkRpcError(requestId, code, message) {
  */
 function parseDeepLinkFromArgv(argv) {
   try {
-    const args = (argv || []).slice(2).map((x) => String(x || "").trim()).filter(Boolean);
+    const args = (argv || [])
+      .slice(2)
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
     const raw = args.find((a) => /^clipboost:\/\//i.test(a) || a.includes("clipboost://"));
     if (!raw) return null;
 
     const m = raw.match(/clipboost:\/\/[\S]+/i);
-    const u = (m && m[0]) ? m[0] : raw;
+    const u = m && m[0] ? m[0] : raw;
 
     const url = new URL(u);
     if (url.protocol !== "clipboost:") return null;
 
-    const action = (url.hostname || "").trim() || (String(url.pathname || "").replace(/^\/+/, "").trim());
+    const action =
+      (url.hostname || "").trim() || String(url.pathname || "").replace(/^\/+/, "").trim();
     const p = url.searchParams;
     const code = p.get("code") || p.get("token") || p.get("ws") || p.get("url") || "";
 
@@ -121,14 +125,22 @@ function trySelfRegisterUrlProtocol() {
     const cmd = `"${exe}" "%1"`;
 
     // HKCU => kein Admin notwendig
-    child_process.spawnSync("reg", ["add", base, "/ve", "/d", "URL:CLiP-BOOsT Protocol", "/f"], { stdio: "ignore", windowsHide: true });
-    child_process.spawnSync("reg", ["add", base, "/v", "URL Protocol", "/d", "", "/f"], { stdio: "ignore", windowsHide: true });
-    child_process.spawnSync("reg", ["add", base + "\\DefaultIcon", "/ve", "/d", exe + ",0", "/f"], { stdio: "ignore", windowsHide: true });
-    child_process.spawnSync(
-      "reg",
-      ["add", base + "\\shell\\open\\command", "/ve", "/d", cmd, "/f"],
-      { stdio: "ignore", windowsHide: true },
-    );
+    child_process.spawnSync("reg", ["add", base, "/ve", "/d", "URL:CLiP-BOOsT Protocol", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child_process.spawnSync("reg", ["add", base, "/v", "URL Protocol", "/d", "", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child_process.spawnSync("reg", ["add", base + "\\DefaultIcon", "/ve", "/d", exe + ",0", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child_process.spawnSync("reg", ["add", base + "\\shell\\open\\command", "/ve", "/d", cmd, "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
   } catch {
     // ignore
   }
@@ -195,9 +207,7 @@ function getExeDir() {
 }
 
 function getAppDataDir() {
-  const appData =
-    process.env.APPDATA ||
-    path.join(os.homedir(), "AppData", "Roaming");
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
   return path.join(appData, "CLiP-BOOsT", "Helper");
 }
 
@@ -332,24 +342,13 @@ cfg = {
 
 // Read env overrides (still supported for power-users)
 const OBS_WS_URL =
-  process.env.OBS_WS_URL ||
-  cfg.OBS_WS_URL ||
-  cfg.obsWsUrl ||
-  "ws://127.0.0.1:4455";
+  process.env.OBS_WS_URL || cfg.OBS_WS_URL || cfg.obsWsUrl || "ws://127.0.0.1:4455";
 
-const OBS_PASSWORD =
-  process.env.OBS_PASSWORD ||
-  cfg.OBS_PASSWORD ||
-  cfg.obsPassword ||
-  "";
+const OBS_PASSWORD = process.env.OBS_PASSWORD || cfg.OBS_PASSWORD || cfg.obsPassword || "";
 
-let AGENT_WS_URL =
-  normalizeAgentWsUrl(
-    process.env.AGENT_WS_URL ||
-      cfg.AGENT_WS_URL ||
-      cfg.agentWsUrl ||
-      ""
-  );
+let AGENT_WS_URL = normalizeAgentWsUrl(
+  process.env.AGENT_WS_URL || cfg.AGENT_WS_URL || cfg.agentWsUrl || ""
+);
 
 /** --- helpers: robust OBS call with fallback + better logging --- */
 async function obsCallFirst(obs, names, data = {}) {
@@ -391,7 +390,9 @@ function normRecordStatus(resp) {
 
 async function connectObs(obs, obsWsUrl, obsPassword) {
   if (!obsPassword) {
-    log("[obs] OBS Passwort ist leer. Wenn OBS-Auth aktiv ist, trage ein Passwort ein (wird beim ersten Start abgefragt).");
+    log(
+      "[obs] OBS Passwort ist leer. Wenn OBS-Auth aktiv ist, trage ein Passwort ein (wird beim ersten Start abgefragt)."
+    );
   }
 
   for (;;) {
@@ -405,12 +406,26 @@ async function connectObs(obs, obsWsUrl, obsPassword) {
       log("[obs] connect failed", msg);
 
       if (!obsPassword && /authentication|auth|Identify/i.test(msg)) {
-        log("[obs] AUTH REQUIRED: OBS Passwort fehlt. Bitte OBS -> Tools -> WebSocket Server Settings -> Server Password setzen.");
+        log(
+          "[obs] AUTH REQUIRED: OBS Passwort fehlt. Bitte OBS -> Tools -> WebSocket Server Settings -> Server Password setzen."
+        );
       }
 
       await sleep(1500);
     }
   }
+}
+
+/** ---------------- Backend reconnect backoff (P1) ---------------- */
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+function backoffDelayMs(attempt) {
+  // attempt: 0,1,2...
+  const base = clamp(1000 * Math.pow(2, attempt), 1000, 30000);
+  // jitter +/- 20%
+  const jitter = base * (Math.random() * 0.4 - 0.2);
+  return Math.round(clamp(base + jitter, 1000, 30000));
 }
 
 async function main() {
@@ -527,13 +542,31 @@ async function main() {
   // 1) OBS connect (retry loop)
   await connectObs(obs, obsWsUrl, obsPassword);
 
-  // 2) Backend WS connect (retry loop)
+  // 2) Backend WS connect (retry loop with backoff)
   let ws = null;
+
+  let backendAttempt = 0;
+  let backendConnected = false;
+  let lastBackendState = "init"; // init|connecting|connected|disconnected
+  let lastRetryLogAt = 0;
+
+  const setState = (s) => {
+    if (s !== lastBackendState) {
+      lastBackendState = s;
+      return true;
+    }
+    return false;
+  };
 
   async function connectBackendForever() {
     for (;;) {
+      let openedAt = 0;
+
       try {
-        log("[backend] connecting", AGENT_WS_URL);
+        if (setState("connecting")) {
+          log("[backend] connecting", AGENT_WS_URL);
+        }
+
         ws = new WebSocket(AGENT_WS_URL);
 
         await new Promise((resolve, reject) => {
@@ -541,7 +574,12 @@ async function main() {
           ws.on("error", reject);
         });
 
-        log("[backend] connected");
+        openedAt = Date.now();
+        backendConnected = true;
+
+        if (setState("connected")) {
+          log("[backend] connected");
+        }
 
         // hello
         try {
@@ -549,12 +587,8 @@ async function main() {
             JSON.stringify({
               type: "agent_hello",
               label: "obs-agent",
-              version: "1.0.1",
-              capabilities: {
-                scenes: true,
-                recording: true,
-                recordMarker: true,
-              },
+              version: "1.0.2",
+              capabilities: { scenes: true, recording: true, recordMarker: true },
               tsMs: Date.now(),
             })
           );
@@ -706,15 +740,43 @@ async function main() {
           }
         });
 
+        // wait until closed
         await new Promise((resolve) => {
           ws.on("close", resolve);
         });
 
-        log("[backend] closed - will reconnect");
-        await sleep(1500);
+        backendConnected = false;
+        setState("disconnected");
+
+        const aliveMs = openedAt ? Date.now() - openedAt : 0;
+        // Reset backoff only if connection was stable for >= 15s
+        if (aliveMs >= 15000) backendAttempt = 0;
+        else backendAttempt = Math.min(backendAttempt + 1, 10);
+
+        const delay = backoffDelayMs(backendAttempt);
+        const now = Date.now();
+        // throttle: at most one retry log per 3s
+        if (now - lastRetryLogAt > 3000) {
+          lastRetryLogAt = now;
+          log(`[backend] disconnected (uptime ${Math.round(aliveMs / 1000)}s) - retry in ${Math.round(delay / 1000)}s`);
+        }
+
+        await sleep(delay);
       } catch (e) {
-        log("[backend] connect failed", e?.message || String(e));
-        await sleep(1500);
+        backendConnected = false;
+        setState("disconnected");
+
+        backendAttempt = Math.min(backendAttempt + 1, 10);
+        const delay = backoffDelayMs(backendAttempt);
+
+        const msg = e?.message || String(e);
+        const now = Date.now();
+        if (now - lastRetryLogAt > 3000) {
+          lastRetryLogAt = now;
+          log(`[backend] connect failed: ${msg} - retry in ${Math.round(delay / 1000)}s`);
+        }
+
+        await sleep(delay);
       }
     }
   }

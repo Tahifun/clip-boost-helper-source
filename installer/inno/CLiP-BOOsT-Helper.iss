@@ -29,8 +29,9 @@ DefaultDirName={localappdata}\Programs\CLiP-BOOsT\Helper
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+; Fix: x64 deprecated warning -> use x64compatible
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 
 OutputDir=..\..\dist
 OutputBaseFilename=CLiP-BOOsT-Helper-Setup
@@ -42,6 +43,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 ; SetupIconFile=..\..\assets\icon.ico
 
 [Tasks]
+; Wichtig: Autostart NICHT default-aktiv (du willst es erst im Schnellstart-Step)
 Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescription: "Optionen:"; Flags: unchecked
 Name: "autostart"; Description: "Helper beim Windows-Start automatisch starten"; GroupDescription: "Optionen:"; Flags: unchecked
 
@@ -64,5 +66,6 @@ Root: HKCU; Subkey: "Software\Classes\clipboost\shell\open\command"; ValueType: 
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CLiP-BOOsT Helper"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: autostart
 
 [Run]
-; Start helper after install
-Filename: "{app}\{#MyAppExeName}"; Description: "CLiP-BOOsT Helper starten"; Flags: nowait postinstall skipifsilent
+; Helper NICHT automatisch starten (McAfee false positive kann Install stören)
+; Optionaler Start via Checkbox im Setup:
+Filename: "{app}\{#MyAppExeName}"; Description: "CLiP-BOOsT Helper jetzt starten"; Flags: nowait postinstall skipifsilent unchecked

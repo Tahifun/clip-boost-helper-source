@@ -1,6 +1,6 @@
-node_modules/
-build/
+﻿node_modules/
 dist/
+build/
 obs-agent.config.json
 *.log
 .DS_Store
