@@ -350,8 +350,20 @@ let AGENT_WS_URL = normalizeAgentWsUrl(
   process.env.AGENT_WS_URL || cfg.AGENT_WS_URL || cfg.agentWsUrl || ""
 );
 
+// Runtime state
+// NOTE: Wir verbinden zuerst das Backend (Agent Online), OBS kann danach (oder parallel)
+// kommen. Dadurch blockiert ein nicht gestartetes OBS nicht den gesamten Funnel.
+let OBS_CONNECTED = false;
+let OBS_CONNECTING = false;
+let OBS_LAST_ERROR = "";
+
 /** --- helpers: robust OBS call with fallback + better logging --- */
 async function obsCallFirst(obs, names, data = {}) {
+  if (!OBS_CONNECTED) {
+    const err = new Error("OBS not connected");
+    err.code = "obs_disconnected";
+    throw err;
+  }
   let lastErr = null;
 
   for (const n of names) {
@@ -361,6 +373,12 @@ async function obsCallFirst(obs, names, data = {}) {
       lastErr = e;
       const msg = e?.message || String(e);
       const code = e?.code || e?.errorCode || e?.rpcCode || "";
+
+      // Wenn OBS weg ist, markieren wir den Status als offline und lassen den Reconnect-Loop arbeiten.
+      if (/not connected|connection closed|socket|ECONNREFUSED/i.test(msg)) {
+        OBS_CONNECTED = false;
+        OBS_LAST_ERROR = msg;
+      }
       log(`[obs] call failed: ${n}`, { msg, code });
     }
   }
@@ -539,8 +557,54 @@ async function main() {
 
   const obs = new OBSWebSocket();
 
-  // 1) OBS connect (retry loop)
-  await connectObs(obs, obsWsUrl, obsPassword);
+  // 1) OBS connect (non-blocking background loop)
+  // IMPORTANT: Der Agent muss das Backend (WS) auch dann verbinden, wenn OBS noch
+  // nicht läuft. Sonst bleibt Onboarding hängen.
+  let lastObsLogAt = 0;
+
+  const tryConnectObsOnce = async () => {
+    if (OBS_CONNECTED || OBS_CONNECTING) return;
+    OBS_CONNECTING = true;
+    try {
+      log("[obs] connecting", obsWsUrl);
+      // obs-websocket-js: connect(url, password?, options?)
+      await obs.connect(obsWsUrl, obsPassword || undefined, { rpcVersion: 1 });
+      OBS_CONNECTED = true;
+      OBS_LAST_ERROR = null;
+      log("[obs] connected");
+    } catch (e) {
+      OBS_CONNECTED = false;
+      OBS_LAST_ERROR = e?.message || String(e);
+
+      // Log throttling for ECONNREFUSED spam
+      const now = Date.now();
+      const msg = OBS_LAST_ERROR;
+      if (!msg || !/ECONNREFUSED/i.test(msg) || now - lastObsLogAt > 5000) {
+        log("[obs] connect failed", msg);
+        lastObsLogAt = now;
+      }
+    } finally {
+      OBS_CONNECTING = false;
+    }
+  };
+
+  // Kick off + retry loop
+  void tryConnectObsOnce();
+  setInterval(() => {
+    void tryConnectObsOnce();
+  }, 1500);
+
+  // Heartbeat: detect disconnect
+  setInterval(async () => {
+    if (!OBS_CONNECTED) return;
+    try {
+      await obs.call("GetVersion");
+    } catch (e) {
+      OBS_CONNECTED = false;
+      OBS_LAST_ERROR = e?.message || String(e);
+      log("[obs] disconnected", OBS_LAST_ERROR);
+    }
+  }, 5000);
 
   // 2) Backend WS connect (retry loop with backoff)
   let ws = null;
@@ -616,6 +680,18 @@ async function main() {
               ws.send(JSON.stringify(payload));
             } catch {}
           };
+
+          // Guard: OBS calls require a live OBS connection.
+          if (type.startsWith("obs_") && !OBS_CONNECTED) {
+            reply(
+              mkRpcError(
+                requestId,
+                "obs_disconnected",
+                "OBS ist nicht verbunden. Starte OBS und aktiviere OBS WebSocket (Port 4455)."
+              )
+            );
+            return;
+          }
 
           try {
             // -------- Scenes --------
