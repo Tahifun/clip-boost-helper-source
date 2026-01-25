@@ -1,3 +1,4 @@
+; installer/inno/CLiP-BOOsT-Helper.iss
 ; CLiP-BOOsT Helper Installer (per-user, no admin)
 ; Requires: Inno Setup 6
 ;
@@ -43,6 +44,9 @@ Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescrip
 
 [Files]
 Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; NEW: hidden launcher for URL protocol (prevents terminal window)
+Source: "launcher.vbs"; DestDir: "{app}"; Flags: ignoreversion
+
 ; Optional assets
 ; Source: "..\..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -55,7 +59,9 @@ Name: "{autodesktop}\CLiP-BOOsT Helper"; Filename: "{app}\{#MyAppExeName}"; Task
 Root: HKCU; Subkey: "Software\Classes\clipboost"; ValueType: string; ValueName: ""; ValueData: "URL:CLiP-BOOsT Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\clipboost"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\clipboost\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
-Root: HKCU; Subkey: "Software\Classes\clipboost\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+
+; NEW: use wscript + launcher.vbs so helper starts hidden (no console window)
+Root: HKCU; Subkey: "Software\Classes\clipboost\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{sys}\wscript.exe"" ""{app}\launcher.vbs"" ""{app}\{#MyAppExeName}"" ""%1"""
 
 [Run]
 ; Helper NICHT automatisch starten (McAfee false positive kann Install stören)
