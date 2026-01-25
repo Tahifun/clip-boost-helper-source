@@ -1,3 +1,4 @@
+// obs-agent.mjs
 // CLiP-BOOsT Helper (OBS Agent)
 // Connects CLiP-BOOsT backend <-> OBS WebSocket (v5).
 //
@@ -83,7 +84,9 @@ function parseDeepLinkFromArgv(argv) {
       .slice(2)
       .map((x) => String(x || "").trim())
       .filter(Boolean);
-    const raw = args.find((a) => /^clipboost:\/\//i.test(a) || a.includes("clipboost://"));
+    const raw = args.find(
+      (a) => /^clipboost:\/\//i.test(a) || a.includes("clipboost://")
+    );
     if (!raw) return null;
 
     const m = raw.match(/clipboost:\/\/[\S]+/i);
@@ -93,7 +96,8 @@ function parseDeepLinkFromArgv(argv) {
     if (url.protocol !== "clipboost:") return null;
 
     const action =
-      (url.hostname || "").trim() || String(url.pathname || "").replace(/^\/+/, "").trim();
+      (url.hostname || "").trim() ||
+      String(url.pathname || "").replace(/^\/+/, "").trim();
     const p = url.searchParams;
     const code = p.get("code") || p.get("token") || p.get("ws") || p.get("url") || "";
 
@@ -114,6 +118,46 @@ function parseDeepLinkFromArgv(argv) {
   }
 }
 
+function getExeDir() {
+  try {
+    // When packaged, this is the path to the .exe
+    return path.dirname(process.execPath);
+  } catch {
+    return process.cwd();
+  }
+}
+
+function getAppDataDir() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  return path.join(appData, "CLiP-BOOsT", "Helper");
+}
+
+function getPrimaryConfigPath() {
+  return path.join(getAppDataDir(), "obs-agent.config.json");
+}
+
+function ensureProtocolLauncherVbs() {
+  try {
+    const vbsPath = path.join(getExeDir(), "launcher.vbs");
+    if (fs.existsSync(vbsPath)) return vbsPath;
+
+    const content = [
+      "Dim shell, exe, arg",
+      'Set shell = CreateObject("WScript.Shell")',
+      "exe = WScript.Arguments(0)",
+      "arg = WScript.Arguments(1)",
+      'shell.Run """" & exe & """ " & arg, 0, False',
+      "",
+    ].join("\r\n");
+
+    fs.writeFileSync(vbsPath, content, "utf8");
+    return vbsPath;
+  } catch {
+    return null;
+  }
+}
+
+// UPDATED: register protocol so it starts hidden via wscript + launcher.vbs
 function trySelfRegisterUrlProtocol() {
   if (process.platform !== "win32") return;
 
@@ -121,8 +165,15 @@ function trySelfRegisterUrlProtocol() {
     const exe = process.execPath;
     if (!exe) return;
 
+    const vbsPath = ensureProtocolLauncherVbs();
+    if (!vbsPath) return;
+
     const base = "HKCU\\Software\\Classes\\clipboost";
-    const cmd = `"${exe}" "%1"`;
+    const windir = process.env.WINDIR || "C:\\Windows";
+    const wscript = path.join(windir, "System32", "wscript.exe");
+
+    // wscript "<vbs>" "<exe>" "%1"
+    const cmd = `"${wscript}" "${vbsPath}" "${exe}" "%1"`;
 
     // HKCU => kein Admin notwendig
     child_process.spawnSync("reg", ["add", base, "/ve", "/d", "URL:CLiP-BOOsT Protocol", "/f"], {
@@ -195,24 +246,6 @@ function tryOpenObsWin() {
 
   // fallback: open download page
   return openUrl("https://obsproject.com/download");
-}
-
-function getExeDir() {
-  try {
-    // When packaged, this is the path to the .exe
-    return path.dirname(process.execPath);
-  } catch {
-    return process.cwd();
-  }
-}
-
-function getAppDataDir() {
-  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
-  return path.join(appData, "CLiP-BOOsT", "Helper");
-}
-
-function getPrimaryConfigPath() {
-  return path.join(getAppDataDir(), "obs-agent.config.json");
 }
 
 function loadLocalConfig() {
@@ -406,34 +439,6 @@ function normRecordStatus(resp) {
   return { outputActive, outputPaused, outputTimecode };
 }
 
-async function connectObs(obs, obsWsUrl, obsPassword) {
-  if (!obsPassword) {
-    log(
-      "[obs] OBS Passwort ist leer. Wenn OBS-Auth aktiv ist, trage ein Passwort ein (wird beim ersten Start abgefragt)."
-    );
-  }
-
-  for (;;) {
-    try {
-      log("[obs] connecting", obsWsUrl);
-      await obs.connect(obsWsUrl, obsPassword, { rpcVersion: 1 });
-      log("[obs] connected");
-      return;
-    } catch (e) {
-      const msg = e?.message || String(e);
-      log("[obs] connect failed", msg);
-
-      if (!obsPassword && /authentication|auth|Identify/i.test(msg)) {
-        log(
-          "[obs] AUTH REQUIRED: OBS Passwort fehlt. Bitte OBS -> Tools -> WebSocket Server Settings -> Server Password setzen."
-        );
-      }
-
-      await sleep(1500);
-    }
-  }
-}
-
 /** ---------------- Backend reconnect backoff (P1) ---------------- */
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -568,310 +573,4 @@ async function main() {
     try {
       log("[obs] connecting", obsWsUrl);
       // obs-websocket-js: connect(url, password?, options?)
-      await obs.connect(obsWsUrl, obsPassword || undefined, { rpcVersion: 1 });
-      OBS_CONNECTED = true;
-      OBS_LAST_ERROR = null;
-      log("[obs] connected");
-    } catch (e) {
-      OBS_CONNECTED = false;
-      OBS_LAST_ERROR = e?.message || String(e);
-
-      // Log throttling for ECONNREFUSED spam
-      const now = Date.now();
-      const msg = OBS_LAST_ERROR;
-      if (!msg || !/ECONNREFUSED/i.test(msg) || now - lastObsLogAt > 5000) {
-        log("[obs] connect failed", msg);
-        lastObsLogAt = now;
-      }
-    } finally {
-      OBS_CONNECTING = false;
-    }
-  };
-
-  // Kick off + retry loop
-  void tryConnectObsOnce();
-  setInterval(() => {
-    void tryConnectObsOnce();
-  }, 1500);
-
-  // Heartbeat: detect disconnect
-  setInterval(async () => {
-    if (!OBS_CONNECTED) return;
-    try {
-      await obs.call("GetVersion");
-    } catch (e) {
-      OBS_CONNECTED = false;
-      OBS_LAST_ERROR = e?.message || String(e);
-      log("[obs] disconnected", OBS_LAST_ERROR);
-    }
-  }, 5000);
-
-  // 2) Backend WS connect (retry loop with backoff)
-  let ws = null;
-
-  let backendAttempt = 0;
-  let backendConnected = false;
-  let lastBackendState = "init"; // init|connecting|connected|disconnected
-  let lastRetryLogAt = 0;
-
-  const setState = (s) => {
-    if (s !== lastBackendState) {
-      lastBackendState = s;
-      return true;
-    }
-    return false;
-  };
-
-  async function connectBackendForever() {
-    for (;;) {
-      let openedAt = 0;
-
-      try {
-        if (setState("connecting")) {
-          log("[backend] connecting", AGENT_WS_URL);
-        }
-
-        ws = new WebSocket(AGENT_WS_URL);
-
-        await new Promise((resolve, reject) => {
-          ws.on("open", resolve);
-          ws.on("error", reject);
-        });
-
-        openedAt = Date.now();
-        backendConnected = true;
-
-        if (setState("connected")) {
-          log("[backend] connected");
-        }
-
-        // hello
-        try {
-          ws.send(
-            JSON.stringify({
-              type: "agent_hello",
-              label: "obs-agent",
-              version: "1.0.2",
-              capabilities: { scenes: true, recording: true, recordMarker: true },
-              tsMs: Date.now(),
-            })
-          );
-        } catch {}
-
-        ws.on("message", async (buf) => {
-          const raw = typeof buf === "string" ? buf : buf.toString("utf-8");
-          const msg = safeJsonParse(raw);
-          if (!msg || typeof msg !== "object") return;
-
-          const type = String(msg.type || "");
-          const requestId = msg.requestId ? String(msg.requestId) : "";
-
-          // ping
-          if (type === "agent_ping") {
-            try {
-              ws.send(JSON.stringify({ type: "agent_pong", requestId, tsMs: Date.now() }));
-            } catch {}
-            return;
-          }
-
-          // helper: reply
-          const reply = (payload) => {
-            try {
-              ws.send(JSON.stringify(payload));
-            } catch {}
-          };
-
-          // Guard: OBS calls require a live OBS connection.
-          if (type.startsWith("obs_") && !OBS_CONNECTED) {
-            reply(
-              mkRpcError(
-                requestId,
-                "obs_disconnected",
-                "OBS ist nicht verbunden. Starte OBS und aktiviere OBS WebSocket (Port 4455)."
-              )
-            );
-            return;
-          }
-
-          try {
-            // -------- Scenes --------
-            if (type === "obs_get_scenes") {
-              const list = await obsCallFirst(obs, ["GetSceneList"]);
-              const cur = await obsCallFirst(obs, ["GetCurrentProgramScene"]).catch(() => ({}));
-
-              reply({
-                type: "obs_scenes",
-                requestId,
-                currentProgramSceneName: cur?.currentProgramSceneName || list?.currentProgramSceneName,
-                scenes: Array.isArray(list?.scenes) ? list.scenes : [],
-                tsMs: Date.now(),
-              });
-              return;
-            }
-
-            if (type === "obs_set_scene") {
-              const sceneName = String(msg.sceneName || "").trim();
-              if (!sceneName) {
-                reply(mkRpcError(requestId, "bad_request", "sceneName missing"));
-                return;
-              }
-
-              await obsCallFirst(obs, ["SetCurrentProgramScene"], { sceneName });
-              reply({ type: "obs_set_scene_ok", requestId, sceneName, tsMs: Date.now() });
-              return;
-            }
-
-            // -------- Recording (robust + idempotent) --------
-            if (type === "obs_get_record_status") {
-              try {
-                const rawSt = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]);
-                const st = normRecordStatus(rawSt);
-                reply({ type: "obs_record_status", requestId, ...st, tsMs: Date.now() });
-              } catch (e) {
-                const msg2 = e?.message || String(e);
-                log("[obs] get_record_status failed", { msg: msg2 });
-                reply({ type: "error", requestId, error: "obs_call_failed", message: msg2, tsMs: Date.now() });
-              }
-              return;
-            }
-
-            if (type === "obs_record_start") {
-              try {
-                await obsCallFirst(obs, ["StartRecord", "StartRecording"]);
-                const rawSt = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]).catch(() => ({}));
-                const st = normRecordStatus(rawSt);
-                reply({ type: "obs_record_started", requestId, ...st, tsMs: Date.now() });
-              } catch (e) {
-                const msg2 = e?.message || String(e);
-                log("[obs] record_start failed", { msg: msg2 });
-                reply({ type: "error", requestId, error: "obs_call_failed", message: msg2, tsMs: Date.now() });
-              }
-              return;
-            }
-
-            if (type === "obs_record_stop") {
-              try {
-                const beforeRaw = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]);
-                const before = normRecordStatus(beforeRaw);
-
-                if (!before.outputActive) {
-                  reply({ type: "obs_record_stopped", requestId, ...before, tsMs: Date.now() });
-                  return;
-                }
-
-                await obsCallFirst(obs, ["StopRecord", "StopRecording"]);
-
-                const afterRaw = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]).catch(() => ({}));
-                const after = normRecordStatus(afterRaw);
-                reply({ type: "obs_record_stopped", requestId, ...after, tsMs: Date.now() });
-              } catch (e) {
-                const msg2 = e?.message || String(e);
-                log("[obs] record_stop failed", { msg: msg2 });
-                reply({ type: "error", requestId, error: "obs_call_failed", message: msg2, tsMs: Date.now() });
-              }
-              return;
-            }
-
-            if (type === "obs_record_toggle") {
-              try {
-                const beforeRaw = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]).catch(() => ({}));
-                const before = normRecordStatus(beforeRaw);
-
-                try {
-                  await obsCallFirst(obs, ["ToggleRecord", "ToggleRecording"]);
-                } catch {
-                  if (before.outputActive) {
-                    await obsCallFirst(obs, ["StopRecord", "StopRecording"]);
-                  } else {
-                    await obsCallFirst(obs, ["StartRecord", "StartRecording"]);
-                  }
-                }
-
-                const afterRaw = await obsCallFirst(obs, ["GetRecordStatus", "GetRecordingStatus"]).catch(() => ({}));
-                const after = normRecordStatus(afterRaw);
-                reply({ type: "obs_record_toggled", requestId, ...after, tsMs: Date.now() });
-              } catch (e) {
-                const msg2 = e?.message || String(e);
-                log("[obs] record_toggle failed", { msg: msg2 });
-                reply({ type: "error", requestId, error: "obs_call_failed", message: msg2, tsMs: Date.now() });
-              }
-              return;
-            }
-
-            if (type === "obs_record_marker") {
-              const name = String(msg.name || "").trim();
-              try {
-                await obsCallFirst(obs, ["CreateRecordChapter"], name ? { chapterName: name } : {});
-                reply({ type: "obs_record_marker_ok", requestId, name, tsMs: Date.now() });
-              } catch (e) {
-                const msg2 = e?.message || String(e);
-                reply(mkRpcError(requestId, "marker_not_supported", msg2 || "CreateRecordChapter failed"));
-              }
-              return;
-            }
-
-            return;
-          } catch (e) {
-            reply(mkRpcError(requestId, "obs_call_failed", e?.message || String(e)));
-          }
-        });
-
-        // wait until closed
-        await new Promise((resolve) => {
-          ws.on("close", resolve);
-        });
-
-        backendConnected = false;
-        setState("disconnected");
-
-        const aliveMs = openedAt ? Date.now() - openedAt : 0;
-        // Reset backoff only if connection was stable for >= 15s
-        if (aliveMs >= 15000) backendAttempt = 0;
-        else backendAttempt = Math.min(backendAttempt + 1, 10);
-
-        const delay = backoffDelayMs(backendAttempt);
-        const now = Date.now();
-        // throttle: at most one retry log per 3s
-        if (now - lastRetryLogAt > 3000) {
-          lastRetryLogAt = now;
-          log(`[backend] disconnected (uptime ${Math.round(aliveMs / 1000)}s) - retry in ${Math.round(delay / 1000)}s`);
-        }
-
-        await sleep(delay);
-      } catch (e) {
-        backendConnected = false;
-        setState("disconnected");
-
-        backendAttempt = Math.min(backendAttempt + 1, 10);
-        const delay = backoffDelayMs(backendAttempt);
-
-        const msg = e?.message || String(e);
-        const now = Date.now();
-        if (now - lastRetryLogAt > 3000) {
-          lastRetryLogAt = now;
-          log(`[backend] connect failed: ${msg} - retry in ${Math.round(delay / 1000)}s`);
-        }
-
-        await sleep(delay);
-      }
-    }
-  }
-
-  // Graceful shutdown
-  process.on("SIGINT", () => {
-    try {
-      ws?.close();
-    } catch {}
-    try {
-      obs?.disconnect();
-    } catch {}
-    process.exit(0);
-  });
-
-  await connectBackendForever();
-}
-
-main().catch((e) => {
-  console.error("[agent] fatal", e?.message || e);
-  process.exit(1);
-});
+      await obs.connect(obsWs
